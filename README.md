@@ -760,6 +760,269 @@ P(>=12)
 
 ---
 
+# Próximas implementações estruturais
+
+As melhorias abaixo são **Challengers de pesquisa**. Elas não alteram o Champion apenas por parecerem intuitivamente melhores. Toda promoção depende de validação cronológica fora da amostra e deve respeitar integralmente as Hard Constraints.
+
+## Auditoria específica de D12 / D13 / D23
+
+A auditoria dos duplos não deve depender apenas de `1 - p(top1)`, porque essa expressão mede exatamente a cobertura de `D23`, mas não representa o ganho de `D12` ou `D13`.
+
+Para cada jogo, calcular e exibir:
+
+```text
+p(top1)
+p(top2)
+p(top3)
+CoberturaD12 = p(top1) + p(top2)
+CoberturaD13 = p(top1) + p(top3)
+CoberturaD23 = p(top2) + p(top3)
+tipo escolhido
+cobertura escolhida
+```
+
+A telemetria deve permitir entender por que um jogo recebeu `D12`, `D13`, `D23` ou permaneceu seco.
+
+## DoubleGain
+
+Definir o ganho marginal da segunda marcação em relação ao melhor seco possível naquele jogo:
+
+```text
+DoubleGain = CoberturaDuplo - p(top1)
+```
+
+Logo:
+
+```text
+DoubleGain(D12) = p(top2)
+DoubleGain(D13) = p(top3)
+DoubleGain(D23) = 1 - 2*p(top1)
+```
+
+A última expressão é válida quando a comparação é entre `D23` e seco Top1.
+
+Reportar:
+
+```text
+Jogo
+TipoDuplo
+CoberturaDuplo
+CoberturaSecoReferencia
+DoubleGain
+```
+
+`DoubleGain` é diagnóstico local. A decisão final continua sendo global, pois uma escolha local pode exigir compensações estruturais em outros jogos para manter 10-5-5.
+
+## StructuralCost
+
+Medir o custo probabilístico imposto pela estrutura obrigatória 10-5-5.
+
+Uma definição operacional pode comparar:
+
+```text
+P13plus_relaxado = melhor P(>=13) com 8 secos e 6 duplos, sem impor 10/5/5
+P13plus_10_5_5 = melhor P(>=13) respeitando todas as Hard Constraints
+
+StructuralCost = P13plus_relaxado - P13plus_10_5_5
+```
+
+Esse valor não serve para relaxar as Hard Constraints. Ele serve apenas para quantificar quanto custa a distribuição estrutural obrigatória.
+
+## Backtest por composição dos 6 duplos
+
+Registrar para cada concurso a composição efetivamente utilizada:
+
+```text
+D12
+D13
+D23
+```
+
+Avaliar agrupamentos como:
+
+```text
+4 D23 + 1 D12 + 1 D13
+3 D23 + 2 D12 + 1 D13
+3 D23 + 1 D12 + 2 D13
+outras composições válidas
+```
+
+Para cada composição, reportar quando houver amostra suficiente:
+
+```text
+n_concursos
+14
+>=13
+>=12
+mean_hits
+median_hits
+Net13Gain
+RecoveryRate
+DoubleWasteRate
+DecisionNetGain
+```
+
+Não promover uma composição fixa com base apenas na frequência com que o otimizador a escolhe. A comparação precisa ser fora da amostra.
+
+## Ablation estrutural
+
+Comparar pelo menos:
+
+```text
+A = otimizador livre atual
+B = composição fixa 4 D23 + 1 D12 + 1 D13
+C = composição escolhida por evidência histórica
+D = composição condicionada a risk_rank + gaps + entropia
+```
+
+Todas as variantes devem produzir exatamente:
+
+```text
+8 secos
+6 duplos
+0 triplos
+10 Top1
+5 Top2
+5 Top3
+20 marcações
+```
+
+Critério principal de comparação:
+
+```text
+>=13
+Net13Gain
+```
+
+Métricas intermediárias nunca substituem esse critério.
+
+## Matriz de substituições locais
+
+Para cada duplo do bilhete Champion:
+
+1. remover temporariamente aquele duplo;
+2. testar candidatos secos que poderiam receber a marcação adicional;
+3. reconstruir uma solução global válida 10-5-5;
+4. recalcular exatamente `P(>=13)`;
+5. medir a perda ou ganho da substituição.
+
+Telemetria sugerida:
+
+```text
+DuploOriginal
+JogoSubstituto
+TipoOriginal
+TipoSubstituto
+P13plus_original
+P13plus_alternativo
+DeltaP13plus
+```
+
+Isso permite distinguir duplos essenciais de decisões quase intercambiáveis.
+
+## Explicação de seco inesperado
+
+Quando um jogo de `risk_rank` baixo permanecer seco enquanto um jogo de rank posterior receber duplo, emitir diagnóstico estrutural em vez de tratar isso automaticamente como anomalia.
+
+Exemplo conceitual:
+
+```text
+Jogo A permaneceu seco porque promovê-lo a duplo exigiria
+uma compensação estrutural em outro jogo que reduziria P(>=13).
+```
+
+Quando possível, quantificar a diferença por `DeltaP13plus`.
+
+---
+
+# Pesquisa condicional Top1_fail -> Top2 / Top3
+
+Uma questão central do 10-5-5 é decidir não apenas **quais jogos dobrar**, mas também **qual rank adicional selecionar**.
+
+A análise deve estudar, condicionalmente à falha do Top1:
+
+```text
+P(top2_hit | top1_fail)
+P(top3_hit | top1_fail)
+```
+
+## Modelo condicional Top2 vs Top3
+
+Treinar um Challenger somente nos jogos históricos em que:
+
+```text
+top1_hit = 0
+```
+
+Target binário sugerido:
+
+```text
+Top2 -> 1
+Top3 -> 0
+```
+
+Features candidatas:
+
+```text
+risk_rank
+gap12
+gap13
+gap23
+entropia
+p(top1)
+p(top2)
+p(top3)
+posição no concurso
+janelas históricas recentes
+```
+
+O modelo não deve substituir diretamente as probabilidades originais sem validação. Sua primeira aplicação preferencial é fornecer evidência para escolher entre `D12`, `D13` e `D23` dentro do otimizador estrutural.
+
+## Calibração condicional Top2/Top3
+
+Auditar historicamente:
+
+```text
+P(top2_hit | top1_fail, risk_rank)
+P(top3_hit | top1_fail, risk_rank)
+```
+
+Também segmentar, quando houver amostra suficiente, por:
+
+```text
+gap12
+gap23
+entropia
+faixa de p(top1)
+período recente
+```
+
+Aplicar shrinkage e intervalos de confiança para evitar sobreajuste em células pequenas.
+
+## Métricas do seletor Top2/Top3
+
+Reportar:
+
+```text
+ConditionalAccuracy
+ConditionalLogLoss
+ConditionalBrier
+Top2Recall_when_Top1Fails
+Top3Recall_when_Top1Fails
+```
+
+A métrica final continua sendo o impacto no bilhete:
+
+```text
+>=13
+Net13Gain
+DecisionNetGain
+```
+
+Uma melhora no classificador condicional só deve ser promovida se produzir decisões estruturais melhores fora da amostra.
+
+---
+
 # Critério de promoção Champion/Challenger
 
 Uma nova técnica não deve ser promovida apenas porque melhora uma métrica intermediária.
