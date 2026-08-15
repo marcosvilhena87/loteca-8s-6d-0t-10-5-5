@@ -44,6 +44,59 @@ def _ticket_distribution(predictions: list[dict]) -> list[float]:
     return hit_distribution([game["probabilidade_coberta"] for game in predictions])
 
 
+def substitution_audit(predictions: list[dict]) -> list[dict]:
+    """Measure every valid double/dry exchange with exact P(>=13).
+
+    The exchanged games keep their selected rank sets.  Consequently the
+    10/5/5 totals and the D12/D13/D23 composition are preserved while the
+    location of one double changes.  Invalid Flamengo exchanges are discarded
+    by the independent validator instead of being silently reported.
+    """
+    validate_ticket(predictions)
+    original = sum(_ticket_distribution(predictions)[13:])
+    doubles = [game for game in predictions if game["tipo"] == "duplo"]
+    dry_games = [game for game in predictions if game["tipo"] == "seco"]
+    audit = []
+    for selected in doubles:
+        selected_ranks = tuple(int(rank[-1]) - 1 for rank in selected["ranks_selecionados"].split("+"))
+        for substitute in dry_games:
+            substitute_rank = int(substitute["ranks_selecionados"][-1]) - 1
+            alternative = [dict(game) for game in predictions]
+            by_number = {int(game["Jogo"]): game for game in alternative}
+            demoted = by_number[int(selected["Jogo"])]
+            promoted = by_number[int(substitute["Jogo"])]
+            _set_selected_ranks(demoted, (substitute_rank,))
+            _set_selected_ranks(promoted, selected_ranks)
+            try:
+                validate_ticket(alternative)
+            except ValueError:
+                continue
+            probability = sum(_ticket_distribution(alternative)[13:])
+            audit.append({
+                "DuploOriginal": int(selected["Jogo"]),
+                "JogoSubstituto": int(substitute["Jogo"]),
+                "TipoOriginal": selected["tipo_duplo"],
+                "TipoSubstituto": f"D{selected_ranks[0] + 1}{selected_ranks[1] + 1}",
+                "P13plus_original": original,
+                "P13plus_alternativo": probability,
+                "DeltaP13plus": probability - original,
+            })
+    return audit
+
+
+def _set_selected_ranks(game: dict, ranks: tuple[int, ...]) -> None:
+    """Update a copied prediction consistently for structural audit."""
+    selected = [game[f"top{rank + 1}"] for rank in ranks]
+    game["palpite"] = "".join(result for result in RESULTS_ORDER if result in selected)
+    game["ranks_selecionados"] = "+".join(f"top{rank + 1}" for rank in ranks)
+    game["tipo"] = "duplo" if len(ranks) == 2 else "seco"
+    game["tipo_duplo"] = f"D{ranks[0] + 1}{ranks[1] + 1}" if len(ranks) == 2 else "-"
+    game["probabilidade_coberta"] = sum(game[f"p(top{rank + 1})"] for rank in ranks)
+
+
+RESULTS_ORDER = ("1", "X", "2")
+
+
 def validate_ticket(predictions: list[dict]) -> None:
     """Independently reject an optimized ticket that violates a hard constraint."""
     if len(predictions) != 14:
@@ -169,7 +222,8 @@ def optimize(
         selected = [ranking[index] for index in choice]
         ordered_marks = "".join(result for result in ("1", "X", "2") if result in selected)
         double_kind = f"D{choice[0] + 1}{choice[1] + 1}" if len(choice) == 2 else "-"
-        double_gain = sum(probs[ranking[index]] for index in choice) - probs[ranking[0]] if len(choice) == 2 else 0.0
+        gain = sum(probs[ranking[index]] for index in choice) - probs[ranking[0]] if len(choice) == 2 else 0.0
+        gain_kind = "RecoveryGain" if choice == (1, 2) else ("DoubleGain" if len(choice) == 2 else "-")
         output.append({
             "Concurso": row["Concurso"], "Jogo": row["Jogo"], "Mandante": row["Mandante"], "Visitante": row["Visitante"],
             "p(1)": probs["1"], "p(X)": probs["X"], "p(2)": probs["2"],
@@ -186,7 +240,7 @@ def optimize(
             "delta_pTop1": probs[ranking[0]] - base_probs[base_ranking[0]],
             "top1_base": base_ranking[0], "ranking_mudou": base_ranking != ranking,
             "tipo": "duplo" if len(choice) == 2 else "seco", "tipo_duplo": double_kind,
-            "double_gain": double_gain, "palpite": ordered_marks,
+            "double_gain": gain, "gain_kind": gain_kind, "palpite": ordered_marks,
             "ranks_selecionados": "+".join(f"top{index + 1}" for index in choice),
             "probabilidade_coberta": sum(probs[result] for result in selected),
         })
@@ -221,7 +275,7 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
         print(f"  risk audit: pTop1 {game['pTop1_base']:.4f} -> {game['pTop1_ajustado']:.4f} "
               f"({game['delta_pTop1']:+.4f}); top1 {game['top1_base']} -> {game['top1']} "
               f"| ranking mudou: {'SIM' if game['ranking_mudou'] else 'NÃO'}")
-        double_audit = (f" | {game['tipo_duplo']} DoubleGain={game['double_gain']:+.4f}"
+        double_audit = (f" | {game['tipo_duplo']} {game['gain_kind']}={game['double_gain']:+.4f}"
                         if game["tipo"] == "duplo" else "")
         print(f"  {game['tipo']}: {game['palpite']} [{game['ranks_selecionados']}] "
               f"cobertura={game['probabilidade_coberta']:.4f}{double_audit}")
@@ -249,7 +303,20 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
     print(f"P(12): {distribution[12]:.8%}")
     print(f"P(>=12): {sum(distribution[12:]):.8%}")
     print(f"Auditoria DP vs otimizador: diferença={abs(exact_success - success):.3e}")
+    _print_substitution_audit(predictions)
     _print_double_cutoff(predictions, exact_success)
+
+
+def _print_substitution_audit(predictions: list[dict]) -> None:
+    """Print the best valid replacement for each selected double."""
+    audit = substitution_audit(predictions)
+    print("\n=== MATRIZ DE SUBSTITUIÇÕES ESTRUTURAIS ===")
+    print("Duplo | Substituto | Tipo | P13+ original | P13+ alternativo | DeltaP13+")
+    for game in sorted({item["DuploOriginal"] for item in audit}):
+        best = max((item for item in audit if item["DuploOriginal"] == game), key=lambda item: item["DeltaP13plus"])
+        print(f"{game:>6} | {best['JogoSubstituto']:>10} | {best['TipoOriginal']:>4} | "
+              f"{best['P13plus_original']:.8%} | {best['P13plus_alternativo']:.8%} | "
+              f"{best['DeltaP13plus']:+.8%}")
 
 
 def _print_double_cutoff(predictions: list[dict], original_success: float) -> None:
