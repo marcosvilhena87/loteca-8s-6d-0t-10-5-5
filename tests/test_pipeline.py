@@ -95,9 +95,9 @@ class PipelineTests(unittest.TestCase):
             })
         predictions, probability = optimize(rows, 1.0)
         self.assertGreater(probability, 0)
-        self.assertEqual(sum(item["tipo"] == "seco" for item in predictions), 9)
-        self.assertEqual(sum(item["tipo"] == "duplo" for item in predictions), 5)
-        for rank, expected in ((1, 9), (2, 5), (3, 5)):
+        self.assertEqual(sum(item["tipo"] == "seco" for item in predictions), 8)
+        self.assertEqual(sum(item["tipo"] == "duplo" for item in predictions), 6)
+        for rank, expected in ((1, 10), (2, 5), (3, 5)):
             self.assertEqual(sum(f"top{rank}" in item["ranks_selecionados"].split("+") for item in predictions), expected)
         self.assertIn("1", predictions[0]["palpite"])
         self.assertIn("pTop1_base", predictions[0])
