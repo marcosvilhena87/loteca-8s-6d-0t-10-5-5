@@ -1,4 +1,4 @@
-"""Constrained optimization of a single 9-dry/5-double Loteca ticket."""
+"""Constrained optimization of a single 8-dry/6-double Loteca ticket."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def validate_ticket(predictions: list[dict]) -> None:
         for rank in range(1, 4)
     ]
     markings = sum(len(game["palpite"]) for game in predictions)
-    if (dry, doubles, triples, *rank_counts, markings) != (9, 5, 0, 9, 5, 5, 19):
+    if (dry, doubles, triples, *rank_counts, markings) != (8, 6, 0, 10, 5, 5, 20):
         raise ValueError(
             "Hard Constraints violadas: "
             f"secos={dry}, duplos={doubles}, triplos={triples}, "
@@ -122,7 +122,7 @@ def optimize(
         for counts, frontier in states.items():
             for option in options:
                 new_counts = tuple(counts[index] + (index in option) for index in range(3)) + (counts[3] + (len(option) == 2),)
-                if any(new_counts[index] > (9, 5, 5)[index] for index in range(3)) or new_counts[3] > 5:
+                if any(new_counts[index] > (10, 5, 5)[index] for index in range(3)) or new_counts[3] > 6:
                     continue
                 coverage = sum(probs[ranking[index]] for index in option)
                 bucket = expanded.setdefault(new_counts, [])
@@ -130,7 +130,7 @@ def optimize(
                     bucket.append(Candidate(candidate.p0 * coverage, candidate.p1 * coverage + candidate.p0 * (1 - coverage), candidate.choices + (option,)))
         states = {state: _pareto(frontier) for state, frontier in expanded.items()}
 
-    finalists = states.get((9, 5, 5, 5), [])
+    finalists = states.get((10, 5, 5, 6), [])
     if not finalists:
         raise RuntimeError("Não existe aposta que satisfaça todas as Hard Constraints")
 
@@ -204,9 +204,9 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
     flamengo_games = [game for game in predictions if "FLAMENGO/RJ" in (normalized_team(game["Mandante"]), normalized_team(game["Visitante"]))]
     flamengo_ok = all(("1" if normalized_team(game["Mandante"]) == "FLAMENGO/RJ" else "2") in game["palpite"] for game in flamengo_games)
     print("\n=== VALIDAÇÃO DAS HARD CONSTRAINTS ===")
-    print(f"Secos: {dry}/9 | Duplos: {doubles}/5 | Triplos: 0/0")
-    print(f"Top1: {rank_counts[0]}/9 | Top2: {rank_counts[1]}/5 | Top3: {rank_counts[2]}/5")
-    print(f"Total de marcações: {sum(len(game['palpite']) for game in predictions)}/19")
+    print(f"Secos: {dry}/8 | Duplos: {doubles}/6 | Triplos: 0/0")
+    print(f"Top1: {rank_counts[0]}/10 | Top2: {rank_counts[1]}/5 | Top3: {rank_counts[2]}/5")
+    print(f"Total de marcações: {sum(len(game['palpite']) for game in predictions)}/20")
     print(f"Flamengo/RJ: {'regra satisfeita' if flamengo_ok else 'REGRA VIOLADA'}")
     distribution = _ticket_distribution(predictions)
     exact_success = distribution[13] + distribution[14]
@@ -221,18 +221,18 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
 
 
 def _print_double_cutoff(predictions: list[dict], original_success: float) -> None:
-    """Audit the fifth/sixth Top1-risk boundary and its concrete P13+ cost."""
+    """Audit the sixth/seventh Top1-risk boundary and its concrete P13+ cost."""
     ordered = sorted(predictions, key=lambda game: (-1.0 + game["p(top1)"], int(game["Jogo"])))
-    print("\n=== FRONTEIRA DO 5º VS 6º CANDIDATO A DUPLO ===")
+    print("\n=== FRONTEIRA DO 6º VS 7º CANDIDATO A DUPLO ===")
     print("Rank | Jogo | pTop1 | 1-pTop1 | Decisão")
     for rank, game in enumerate(ordered, 1):
-        separator = "  <--- cutoff" if rank in (5, 6) else ""
+        separator = "  <--- cutoff" if rank in (6, 7) else ""
         print(f"{rank:>4} | {int(game['Jogo']):>4} | {game['p(top1)']:.4f} | {1-game['p(top1)']:.4f} | {game['tipo'].upper()}{separator}")
 
-    fifth, sixth = ordered[4], ordered[5]
+    sixth, seventh = ordered[5], ordered[6]
     exchangeable = (
-        fifth["ranks_selecionados"] == "top2+top3"
-        and sixth["ranks_selecionados"] == "top1"
+        sixth["ranks_selecionados"] == "top2+top3"
+        and seventh["ranks_selecionados"] == "top1"
     )
     if not exchangeable:
         print("Troca direta não aplicável: as decisões globais no cutoff não são Top2+Top3 e Top1.")
@@ -240,20 +240,20 @@ def _print_double_cutoff(predictions: list[dict], original_success: float) -> No
 
     swapped_coverages = []
     for game in predictions:
-        if game is fifth:
+        if game is sixth:
             swapped_coverages.append(game["p(top1)"])
-        elif game is sixth:
+        elif game is seventh:
             swapped_coverages.append(game["p(top2)"] + game["p(top3)"])
         else:
             swapped_coverages.append(game["probabilidade_coberta"])
     swapped = sum(hit_distribution(swapped_coverages)[13:])
     delta = swapped - original_success
     relative = delta / original_success if original_success else 0.0
-    margin = abs(sixth["p(top1)"] - fifth["p(top1)"])
+    margin = abs(seventh["p(top1)"] - sixth["p(top1)"])
     narrow = margin <= 0.01
     material = abs(relative) > 0.01
     print(f"P13+ original: {original_success:.8%}")
-    print(f"P13+ após trocar o 5º pelo 6º: {swapped:.8%}")
+    print(f"P13+ após trocar o 6º pelo 7º: {swapped:.8%}")
     print(f"Delta absoluto: {delta:+.8%} | Delta relativo: {relative:+.4%}")
     print(f"Margem pTop1: {margin:.4f}")
     print(f"Fronteira probabilística: {'ESTREITA' if narrow else 'AMPLA'}")
