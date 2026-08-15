@@ -88,7 +88,7 @@ A estrutura 8S-6D-0T contém 20 marcações e precisa distribuir essas marcaçõ
 5 Top3
 ```
 
-Diferentemente da estratégia 9S-5D-0T — 9-5-5, não é possível usar simplesmente os 6 menores `p(top1)` como `Top2+Top3`, porque isso produziria:
+Não é possível usar simplesmente os 6 menores `p(top1)` como `Top2+Top3`, porque isso produziria:
 
 ```text
 8 Top1
