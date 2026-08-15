@@ -781,6 +781,11 @@ tipo escolhido
 cobertura escolhida
 ```
 
+Implementado: o CSV e a telemetria registram `CoberturaD12`,
+`CoberturaD13`, `CoberturaD23`, `tipo_duplo` e `double_gain`, além do resumo da
+composição D12/D13/D23 do bilhete. Esses campos são apenas diagnósticos; a
+escolha continua sendo feita pela otimização global de `P(>=13)`.
+
 A telemetria deve permitir entender por que um jogo recebeu `D12`, `D13`, `D23` ou permaneceu seco.
 
 ## DoubleGain

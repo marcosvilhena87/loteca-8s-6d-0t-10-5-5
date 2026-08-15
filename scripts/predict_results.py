@@ -134,15 +134,31 @@ def optimize(
     if not finalists:
         raise RuntimeError("Não existe aposta que satisfaça todas as Hard Constraints")
 
-    def soft_score(candidate: Candidate) -> tuple[int, int]:
-        top1_early = sum(0 in choice for choice in candidate.choices[:9])
+    def soft_score(candidate: Candidate) -> tuple[int, int, int, int]:
+        """Apply the documented preferences only between objective ties.
+
+        Runs are evaluated over the game order (not risk order): a longer,
+        less fragmented Top1 sequence is preferred after the Palmeiras rule.
+        None of these criteria can trade away P(>=13).
+        """
+        top1_flags = [0 in choice for choice in candidate.choices]
+        top1_first_ten = sum(top1_flags[:10])
+        runs, longest_run, current_run = 0, 0, 0
+        for selected in top1_flags:
+            if selected:
+                current_run += 1
+                longest_run = max(longest_run, current_run)
+                if current_run == 1:
+                    runs += 1
+            else:
+                current_run = 0
         avoids_palmeiras = 0
         for (row, _, ranking, _, _, _, _), choice in zip(games, candidate.choices):
             home, away = normalized_team(row["Mandante"]), normalized_team(row["Visitante"])
             if "PALMEIRAS/SP" in (home, away):
                 victory = "1" if home == "PALMEIRAS/SP" else "2"
                 avoids_palmeiras += ranking.index(victory) not in choice
-        return avoids_palmeiras, top1_early
+        return avoids_palmeiras, top1_first_ten, longest_run, -runs
 
     best_probability = max(candidate.success for candidate in finalists)
     near_optimal = [candidate for candidate in finalists if best_probability - candidate.success <= 1e-12]
@@ -152,6 +168,8 @@ def optimize(
     for (row, probs, ranking, _, risk_rank, base_probs, base_ranking), choice in zip(games, best.choices):
         selected = [ranking[index] for index in choice]
         ordered_marks = "".join(result for result in ("1", "X", "2") if result in selected)
+        double_kind = f"D{choice[0] + 1}{choice[1] + 1}" if len(choice) == 2 else "-"
+        double_gain = sum(probs[ranking[index]] for index in choice) - probs[ranking[0]] if len(choice) == 2 else 0.0
         output.append({
             "Concurso": row["Concurso"], "Jogo": row["Jogo"], "Mandante": row["Mandante"], "Visitante": row["Visitante"],
             "p(1)": probs["1"], "p(X)": probs["X"], "p(2)": probs["2"],
@@ -160,11 +178,15 @@ def optimize(
             "gap12": probs[ranking[0]] - probs[ranking[1]],
             "gap13": probs[ranking[0]] - probs[ranking[2]],
             "entropy": -sum(probability * math.log(probability) for probability in probs.values()),
+            "CoberturaD12": probs[ranking[0]] + probs[ranking[1]],
+            "CoberturaD13": probs[ranking[0]] + probs[ranking[2]],
+            "CoberturaD23": probs[ranking[1]] + probs[ranking[2]],
             "risk_rank": risk_rank,
             "pTop1_base": base_probs[base_ranking[0]], "pTop1_ajustado": probs[ranking[0]],
             "delta_pTop1": probs[ranking[0]] - base_probs[base_ranking[0]],
             "top1_base": base_ranking[0], "ranking_mudou": base_ranking != ranking,
-            "tipo": "duplo" if len(choice) == 2 else "seco", "palpite": ordered_marks,
+            "tipo": "duplo" if len(choice) == 2 else "seco", "tipo_duplo": double_kind,
+            "double_gain": double_gain, "palpite": ordered_marks,
             "ranks_selecionados": "+".join(f"top{index + 1}" for index in choice),
             "probabilidade_coberta": sum(probs[result] for result in selected),
         })
@@ -194,10 +216,15 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
         print(f"  p(1)={game['p(1)']:.4f} p(X)={game['p(X)']:.4f} p(2)={game['p(2)']:.4f}")
         print(f"  ranking: {game['top1']} ({game['p(top1)']:.4f}) > {game['top2']} ({game['p(top2)']:.4f}) > {game['top3']} ({game['p(top3)']:.4f})")
         print(f"  gap12={game['gap12']:.4f} gap13={game['gap13']:.4f} entropia={game['entropy']:.4f} risk_rank={game['risk_rank']}")
+        print(f"  coberturas: D12={game['CoberturaD12']:.4f} D13={game['CoberturaD13']:.4f} "
+              f"D23={game['CoberturaD23']:.4f}")
         print(f"  risk audit: pTop1 {game['pTop1_base']:.4f} -> {game['pTop1_ajustado']:.4f} "
               f"({game['delta_pTop1']:+.4f}); top1 {game['top1_base']} -> {game['top1']} "
               f"| ranking mudou: {'SIM' if game['ranking_mudou'] else 'NÃO'}")
-        print(f"  {game['tipo']}: {game['palpite']} [{game['ranks_selecionados']}] cobertura={game['probabilidade_coberta']:.4f}")
+        double_audit = (f" | {game['tipo_duplo']} DoubleGain={game['double_gain']:+.4f}"
+                        if game["tipo"] == "duplo" else "")
+        print(f"  {game['tipo']}: {game['palpite']} [{game['ranks_selecionados']}] "
+              f"cobertura={game['probabilidade_coberta']:.4f}{double_audit}")
     dry = sum(game["tipo"] == "seco" for game in predictions)
     doubles = sum(game["tipo"] == "duplo" for game in predictions)
     rank_counts = [sum(f"top{rank}" in game["ranks_selecionados"].split("+") for game in predictions) for rank in range(1, 4)]
@@ -208,6 +235,11 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
     print(f"Top1: {rank_counts[0]}/10 | Top2: {rank_counts[1]}/5 | Top3: {rank_counts[2]}/5")
     print(f"Total de marcações: {sum(len(game['palpite']) for game in predictions)}/20")
     print(f"Flamengo/RJ: {'regra satisfeita' if flamengo_ok else 'REGRA VIOLADA'}")
+    composition = {
+        kind: sum(game["tipo_duplo"] == kind for game in predictions)
+        for kind in ("D12", "D13", "D23")
+    }
+    print(f"Composição dos duplos: D12={composition['D12']} | D13={composition['D13']} | D23={composition['D23']}")
     distribution = _ticket_distribution(predictions)
     exact_success = distribution[13] + distribution[14]
     print("\n=== DECOMPOSIÇÃO DO OBJETIVO ===")

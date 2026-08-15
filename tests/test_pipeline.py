@@ -102,6 +102,15 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("1", predictions[0]["palpite"])
         self.assertIn("pTop1_base", predictions[0])
         self.assertIn("ranking_mudou", predictions[0])
+        self.assertEqual(sum(item["tipo_duplo"] == "D12" for item in predictions), 1)
+        self.assertEqual(sum(item["tipo_duplo"] == "D13" for item in predictions), 1)
+        self.assertEqual(sum(item["tipo_duplo"] == "D23" for item in predictions), 4)
+        for item in predictions:
+            self.assertAlmostEqual(item["CoberturaD12"], item["p(top1)"] + item["p(top2)"])
+            self.assertAlmostEqual(item["CoberturaD13"], item["p(top1)"] + item["p(top3)"])
+            self.assertAlmostEqual(item["CoberturaD23"], item["p(top2)"] + item["p(top3)"])
+            if item["tipo"] == "duplo":
+                self.assertAlmostEqual(item["double_gain"], item["probabilidade_coberta"] - item["p(top1)"])
         distribution = hit_distribution([item["probabilidade_coberta"] for item in predictions])
         self.assertAlmostEqual(probability, sum(distribution[13:]))
 
