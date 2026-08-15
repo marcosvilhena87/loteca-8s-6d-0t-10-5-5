@@ -1,7 +1,7 @@
 import unittest
 
 from scripts.common import rank_results, rank_scale, top1_risk_scale
-from scripts.predict_results import hit_distribution, optimize, validate_ticket
+from scripts.predict_results import hit_distribution, optimize, substitution_audit, validate_ticket
 from scripts.train_model import _decision_impact, _risk_rank_analysis, _tail_metrics, _validated_temperature
 
 
@@ -111,8 +111,16 @@ class PipelineTests(unittest.TestCase):
             self.assertAlmostEqual(item["CoberturaD23"], item["p(top2)"] + item["p(top3)"])
             if item["tipo"] == "duplo":
                 self.assertAlmostEqual(item["double_gain"], item["probabilidade_coberta"] - item["p(top1)"])
+                expected_kind = "RecoveryGain" if item["tipo_duplo"] == "D23" else "DoubleGain"
+                self.assertEqual(item["gain_kind"], expected_kind)
         distribution = hit_distribution([item["probabilidade_coberta"] for item in predictions])
         self.assertAlmostEqual(probability, sum(distribution[13:]))
+
+        audit = substitution_audit(predictions)
+        self.assertTrue(audit)
+        self.assertTrue(all(item["DeltaP13plus"] <= 1e-12 for item in audit))
+        self.assertEqual({item["DuploOriginal"] for item in audit},
+                         {int(item["Jogo"]) for item in predictions if item["tipo"] == "duplo"})
 
     def test_independent_validator_rejects_a_tampered_ticket(self):
         rows = []
