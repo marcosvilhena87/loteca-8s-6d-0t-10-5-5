@@ -17,6 +17,7 @@ class Candidate:
     p0: float
     p1: float
     choices: tuple[tuple[int, ...], ...]
+    avoided_teams: int = 0
 
     @property
     def success(self) -> float:
@@ -124,15 +125,34 @@ def validate_ticket(predictions: list[dict]) -> None:
 
 
 def _pareto(candidates: list[Candidate]) -> list[Candidate]:
-    """Keep only (P(no miss), P(one miss)) non-dominated partial tickets."""
-    ordered = sorted(candidates, key=lambda item: (-item.p0, -item.p1))
     result: list[Candidate] = []
-    best_p1 = -1.0
-    for candidate in ordered:
-        if candidate.p1 > best_p1 + 1e-18:
-            result.append(candidate)
-            best_p1 = candidate.p1
+    # A probabilistically dominated partial ticket may still be the documented
+    # soft-constraint winner inside the near-optimal band.  Preserve one Pareto
+    # frontier for every anti-Palmeiras/Vasco mask so that optimization cannot
+    # discard that preference before the final objective is known.
+    for mask in range(4):
+        ordered = sorted(
+            (item for item in candidates if item.avoided_teams == mask),
+            key=lambda item: (-item.p0, -item.p1),
+        )
+        best_p1 = -1.0
+        for candidate in ordered:
+            if candidate.p1 > best_p1 + 1e-18:
+                result.append(candidate)
+                best_p1 = candidate.p1
     return result
+
+
+def _avoided_team_mask(row: dict[str, str], ranking: tuple[str, str, str], option: tuple[int, ...]) -> int:
+    """Return bits for preferred teams whose victory is absent from a choice."""
+    home, away = normalized_team(row["Mandante"]), normalized_team(row["Visitante"])
+    mask = 0
+    for bit, team in enumerate(("PALMEIRAS/SP", "VASCO DA GAMA/RJ")):
+        if team in (home, away):
+            victory = "1" if home == team else "2"
+            if ranking.index(victory) not in option:
+                mask |= 1 << bit
+    return mask
 
 
 def _allowed_options(row: dict[str, str], ranking: tuple[str, str, str]) -> list[tuple[int, ...]]:
@@ -147,10 +167,13 @@ def _allowed_options(row: dict[str, str], ranking: tuple[str, str, str]) -> list
 def optimize(
     rows: list[dict[str, str]], temperature: float, rank_lifts: list[float] | tuple[float, ...] = (1.0, 1.0, 1.0),
     risk_rank_lifts: list[float] | tuple[float, ...] = (1.0,) * 14,
+    soft_relative_tolerance: float = 0.005,
 ) -> tuple[list[dict], float]:
     validate_next_contest(rows)
     if len(risk_rank_lifts) != 14:
         raise ValueError("risk_rank_lifts deve conter 14 fatores")
+    if not 0.0 <= soft_relative_tolerance < 1.0:
+        raise ValueError("soft_relative_tolerance deve estar no intervalo [0, 1)")
     games = []
     prepared = []
     for row in rows:
@@ -180,7 +203,12 @@ def optimize(
                 coverage = sum(probs[ranking[index]] for index in option)
                 bucket = expanded.setdefault(new_counts, [])
                 for candidate in frontier:
-                    bucket.append(Candidate(candidate.p0 * coverage, candidate.p1 * coverage + candidate.p0 * (1 - coverage), candidate.choices + (option,)))
+                    bucket.append(Candidate(
+                        candidate.p0 * coverage,
+                        candidate.p1 * coverage + candidate.p0 * (1 - coverage),
+                        candidate.choices + (option,),
+                        candidate.avoided_teams | _avoided_team_mask(row, ranking, option),
+                    ))
         states = {state: _pareto(frontier) for state, frontier in expanded.items()}
 
     finalists = states.get((10, 5, 5, 6), [])
@@ -205,17 +233,12 @@ def optimize(
                     runs += 1
             else:
                 current_run = 0
-        avoids_palmeiras = 0
-        for (row, _, ranking, _, _, _, _), choice in zip(games, candidate.choices):
-            home, away = normalized_team(row["Mandante"]), normalized_team(row["Visitante"])
-            if "PALMEIRAS/SP" in (home, away):
-                victory = "1" if home == "PALMEIRAS/SP" else "2"
-                avoids_palmeiras += ranking.index(victory) not in choice
-        return avoids_palmeiras, top1_first_ten, longest_run, -runs
+        return candidate.avoided_teams.bit_count(), top1_first_ten, longest_run, -runs
 
     best_probability = max(candidate.success for candidate in finalists)
-    near_optimal = [candidate for candidate in finalists if best_probability - candidate.success <= 1e-12]
-    best = max(near_optimal, key=soft_score)
+    minimum_probability = best_probability * (1.0 - soft_relative_tolerance)
+    near_optimal = [candidate for candidate in finalists if candidate.success + 1e-18 >= minimum_probability]
+    best = max(near_optimal, key=lambda candidate: (*soft_score(candidate), candidate.success))
 
     output = []
     for (row, probs, ranking, _, risk_rank, base_probs, base_ranking), choice in zip(games, best.choices):
@@ -243,6 +266,9 @@ def optimize(
             "double_gain": gain, "gain_kind": gain_kind, "palpite": ordered_marks,
             "ranks_selecionados": "+".join(f"top{index + 1}" for index in choice),
             "probabilidade_coberta": sum(probs[result] for result in selected),
+            "P13plus_otimo": best_probability,
+            "perda_relativa_soft": (best_probability - best.success) / best_probability,
+            "tolerancia_relativa_soft": soft_relative_tolerance,
         })
     validate_ticket(output)
     return output, best.success
@@ -303,6 +329,10 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
     print(f"P(12): {distribution[12]:.8%}")
     print(f"P(>=12): {sum(distribution[12:]):.8%}")
     print(f"Auditoria DP vs otimizador: diferença={abs(exact_success - success):.3e}")
+    print("Soft constraints: "
+          f"ótimo global={predictions[0]['P13plus_otimo']:.8%} | "
+          f"perda relativa={predictions[0]['perda_relativa_soft']:.6%} | "
+          f"tolerância={predictions[0]['tolerancia_relativa_soft']:.3%}")
     _print_substitution_audit(predictions)
     _print_double_cutoff(predictions, exact_success)
 
