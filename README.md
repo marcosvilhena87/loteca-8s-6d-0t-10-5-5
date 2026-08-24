@@ -35,6 +35,57 @@ Soft Constraints nunca podem relaxar Hard Constraints.
 
 ---
 
+# Soft Constraints — preferências de solução
+
+As Soft Constraints atuam somente depois de garantida a validade estrutural do bilhete e nunca podem violar as Hard Constraints.
+
+## Preferência contra vitórias de Palmeiras e Vasco
+
+Quando **PALMEIRAS/SP** ou **VASCO DA GAMA/RJ** participarem do concurso, favorecer soluções que **excluam a vitória dessas equipes**, priorizando empate ou derrota, desde que isso não comprometa significativamente a qualidade global da aposta.
+
+A regra deve ser tratada como preferência, e não como proibição absoluta:
+
+```text
+1. encontrar a melhor P(>=13) possível dentro das Hard Constraints
+2. definir uma faixa de soluções quase ótimas
+3. dentro dessa faixa, favorecer a exclusão das vitórias de Palmeiras e Vasco
+4. priorizar soluções que excluam a vitória de ambas as equipes
+5. somente depois aplicar os demais critérios de desempate estrutural
+```
+
+A comparação deve usar uma tolerância explícita e auditável em relação ao ótimo global. Uma referência inicial para pesquisa é limitar a perda relativa de `P(>=13)` a **0,5%**, sujeita a validação em backtest walk-forward.
+
+Exemplo:
+
+```text
+P13plus_otimo = 0,04000
+P13plus_candidato = 0,03985
+perda_relativa = 0,375%
+```
+
+Nesse caso, o candidato permanece dentro de uma tolerância de 0,5% e pode ser preferido se excluir uma ou ambas as vitórias indesejadas.
+
+Pontuação conceitual da preferência:
+
+```text
+2 = exclui vitória de PALMEIRAS/SP e VASCO DA GAMA/RJ
+1 = exclui vitória de uma das duas equipes
+0 = não exclui nenhuma
+```
+
+Não adicionar bônus arbitrário diretamente a `P(>=13)`. A ordem correta é:
+
+```text
+ótimo probabilístico
+-> faixa aceitável de quase ótimos
+-> preferência anti-Palmeiras/Vasco
+-> demais critérios de desempate
+```
+
+A tolerância deve ser validada historicamente. Se o ganho da preferência pessoal exigir perda probabilística acima do limite definido, prevalece a solução de maior qualidade global.
+
+---
+
 # Estrutura 10-5-5
 
 Definir:
