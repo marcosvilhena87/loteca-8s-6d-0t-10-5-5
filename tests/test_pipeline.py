@@ -90,7 +90,9 @@ class PipelineTests(unittest.TestCase):
         for game in range(1, 15):
             rows.append({
                 "Concurso": "1", "Jogo": str(game),
-                "Mandante": "FLAMENGO/RJ" if game == 1 else f"TIME {game} A",
+                "Mandante": ("FLAMENGO/RJ" if game == 1 else
+                              "PALMEIRAS/SP" if game == 2 else
+                              "VASCO DA GAMA/RJ" if game == 3 else f"TIME {game} A"),
                 "Visitante": f"TIME {game} B", "p(1)": "0,50", "p(x)": "0,30", "p(2)": "0,20",
             })
         predictions, probability = optimize(rows, 1.0)
@@ -100,8 +102,12 @@ class PipelineTests(unittest.TestCase):
         for rank, expected in ((1, 10), (2, 5), (3, 5)):
             self.assertEqual(sum(f"top{rank}" in item["ranks_selecionados"].split("+") for item in predictions), expected)
         self.assertIn("1", predictions[0]["palpite"])
+        self.assertNotIn("1", predictions[1]["palpite"])
+        self.assertNotIn("1", predictions[2]["palpite"])
         self.assertIn("pTop1_base", predictions[0])
         self.assertIn("ranking_mudou", predictions[0])
+        self.assertAlmostEqual(predictions[0]["P13plus_otimo"], probability)
+        self.assertLessEqual(predictions[0]["perda_relativa_soft"], 0.005)
         self.assertEqual(sum(item["tipo_duplo"] == "D12" for item in predictions), 1)
         self.assertEqual(sum(item["tipo_duplo"] == "D13" for item in predictions), 1)
         self.assertEqual(sum(item["tipo_duplo"] == "D23" for item in predictions), 4)
@@ -135,6 +141,14 @@ class PipelineTests(unittest.TestCase):
         predictions[0]["palpite"] = "1X2"
         with self.assertRaisesRegex(ValueError, "Hard Constraints violadas"):
             validate_ticket(predictions)
+
+    def test_optimizer_rejects_invalid_soft_tolerance(self):
+        rows = [{
+            "Concurso": "1", "Jogo": str(game), "Mandante": f"TIME {game} A",
+            "Visitante": f"TIME {game} B", "p(1)": "0,50", "p(x)": "0,30", "p(2)": "0,20",
+        } for game in range(1, 15)]
+        with self.assertRaisesRegex(ValueError, "intervalo"):
+            optimize(rows, 1.0, soft_relative_tolerance=1.0)
 
 
 if __name__ == "__main__":
