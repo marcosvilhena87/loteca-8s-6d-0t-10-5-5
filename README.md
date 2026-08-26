@@ -44,6 +44,8 @@ Componentes implementados:
 - validação independente das Hard Constraints;
 - matriz de substituições estruturais;
 - `P13plusRegret` por decisão com reotimização global;
+- motor único de otimização condicionada (`force_choice` / `forbid_choice`);
+- `P13plusRegret` separado por alternativa seca, D12, D13 e D23;
 - fronteira diagnóstica do 6º/7º candidato a duplo;
 - preferência anti-Palmeiras/Vasco dentro de faixa quase ótima;
 - regra obrigatória de inclusão da vitória do Flamengo.
@@ -380,7 +382,7 @@ Classificação de robustez
 
 O `P13plusRegret` deve ter precedência sobre conclusões baseadas somente em `pTop1`, `risk_rank` ou posição 6º/7º.
 
-## Extensão recomendada: Regret por alternativa
+## Regret por alternativa — IMPLEMENTADO
 
 Além da melhor alternativa global, calcular separadamente o custo de cada tipo de decisão possível:
 
@@ -418,7 +420,7 @@ Essas faixas devem começar como telemetria e podem ser ajustadas após auditori
 
 ---
 
-# Motor genérico de otimização condicionada — RECOMENDADO
+# Motor genérico de otimização condicionada — IMPLEMENTADO
 
 Criar uma interface única para contrafactuais, por exemplo:
 

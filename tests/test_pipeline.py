@@ -1,7 +1,7 @@
 import unittest
 
 from scripts.common import rank_results, rank_scale, top1_risk_scale
-from scripts.predict_results import decision_regret_audit, hit_distribution, optimize, substitution_audit, validate_ticket
+from scripts.predict_results import alternative_regret_audit, decision_regret_audit, hit_distribution, optimize, optimize_with_constraint, substitution_audit, validate_ticket
 from scripts.train_model import _decision_impact, _risk_rank_analysis, _tail_metrics, _validated_temperature
 
 
@@ -155,7 +155,26 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(all(item["DecisaoAtual"] != item["MelhorAlternativa"] for item in audit))
         self.assertTrue(all(item["RegretAbsoluto"] >= 0 for item in audit))
         self.assertTrue(all(item["P13plus_alternativo"] <= item["P13plus_otimo"] + 1e-12 for item in audit))
-        self.assertTrue(all(item["ClassificacaoRobustez"] in ("FRONTEIRA", "MODERADA", "ROBUSTA") for item in audit))
+        self.assertTrue(all(item["ClassificacaoRobustez"] in
+                            ("FRONTEIRA", "FRÁGIL", "MODERADA", "ROBUSTA", "MUITO ROBUSTA") for item in audit))
+
+    def test_conditioned_optimizer_and_regret_by_alternative(self):
+        rows = [{
+            "Concurso": "1", "Jogo": str(game), "Mandante": f"TIME {game} A",
+            "Visitante": f"TIME {game} B", "p(1)": f"0,{40 + game:02d}",
+            "p(x)": "0,30", "p(2)": f"0,{30 - game:02d}",
+        } for game in range(1, 15)]
+        predictions, _ = optimize(rows, 1.0)
+        forced, _ = optimize_with_constraint(rows, force_choice=(1, (0, 1)))
+        validate_ticket(forced)
+        self.assertEqual(forced[0]["ranks_selecionados"], "top1+top2")
+
+        audit = alternative_regret_audit(predictions)
+        self.assertEqual({item["Jogo"] for item in audit}, set(range(1, 15)))
+        self.assertTrue(all(item["RegretAbsoluto"] >= 0 for item in audit))
+        self.assertGreaterEqual(len({item["Alternativa"] for item in audit}), 4)
+        for game in range(1, 15):
+            self.assertTrue(any(item["AlternativaAtual"] for item in audit if item["Jogo"] == game))
 
     def test_optimizer_rejects_invalid_soft_tolerance(self):
         rows = [{
