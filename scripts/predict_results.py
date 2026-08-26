@@ -112,7 +112,7 @@ def decision_regret_audit(predictions: list[dict]) -> list[dict]:
         alternative_game = next(item for item in alternative if int(item["Jogo"]) == int(game["Jogo"]))
         regret = max(0.0, optimum - alternative_success)
         relative = regret / optimum if optimum else 0.0
-        robustness = "FRONTEIRA" if relative <= 0.001 else ("MODERADA" if relative <= 0.01 else "ROBUSTA")
+        robustness = _robustness_class(relative)
         audit.append({
             "Jogo": int(game["Jogo"]),
             "DecisaoAtual": game["ranks_selecionados"],
@@ -125,6 +125,69 @@ def decision_regret_audit(predictions: list[dict]) -> list[dict]:
             "ClassificacaoRobustez": robustness,
         })
     return audit
+
+
+def _robustness_class(relative_regret: float) -> str:
+    """Classify relative regret using the diagnostic bands in the roadmap."""
+    if relative_regret < 0.005:
+        return "FRONTEIRA"
+    if relative_regret < 0.015:
+        return "FRÁGIL"
+    if relative_regret < 0.03:
+        return "MODERADA"
+    if relative_regret <= 0.07:
+        return "ROBUSTA"
+    return "MUITO ROBUSTA"
+
+
+def alternative_regret_audit(predictions: list[dict]) -> list[dict]:
+    """Measure P13+ regret for every feasible decision type in every game.
+
+    Each alternative is forced while the remaining 13 games are globally
+    reoptimized.  This is more informative than merely forbidding the current
+    choice: it reveals whether dry, D12, D13 or D23 is the least costly
+    counterfactual without ever relaxing the 10-5-5 structure.
+    """
+    validate_ticket(predictions)
+    rows = [{
+        "Concurso": str(game["Concurso"]), "Jogo": str(game["Jogo"]),
+        "Mandante": game["Mandante"], "Visitante": game["Visitante"],
+        "p(1)": str(game["p(1)"]), "p(x)": str(game["p(X)"]), "p(2)": str(game["p(2)"]),
+    } for game in predictions]
+    optimum = float(predictions[0]["P13plus_otimo"])
+    result = []
+    for game in predictions:
+        game_number = int(game["Jogo"])
+        current = game["ranks_selecionados"]
+        for label, choice in (("S1", (0,)), ("S2", (1,)), ("S3", (2,)),
+                              ("D12", (0, 1)), ("D13", (0, 2)), ("D23", (1, 2))):
+            try:
+                ticket, success = optimize_with_constraint(rows, force_choice=(game_number, choice))
+            except RuntimeError:
+                continue
+            validate_ticket(ticket)
+            regret = max(0.0, optimum - success)
+            relative = regret / optimum if optimum else 0.0
+            result.append({
+                "Jogo": game_number, "DecisaoAtual": current, "Alternativa": label,
+                "P13plus_alternativo": success, "RegretAbsoluto": regret,
+                "RegretRelativo": relative, "ClassificacaoRobustez": _robustness_class(relative),
+                "AlternativaAtual": next(item for item in ticket if int(item["Jogo"]) == game_number)["ranks_selecionados"] == current,
+            })
+    return result
+
+
+def optimize_with_constraint(
+    rows: list[dict[str, str]], *, forbid_choice: tuple[int, tuple[int, ...]] | None = None,
+    force_choice: tuple[int, tuple[int, ...]] | None = None,
+) -> tuple[list[dict], float]:
+    """Globally optimize a calibrated contest under one decision constraint."""
+    if (forbid_choice is None) == (force_choice is None):
+        raise ValueError("Informe exatamente uma restrição: forbid_choice ou force_choice")
+    forbidden = {forbid_choice[0]: forbid_choice[1]} if forbid_choice else None
+    forced = {force_choice[0]: force_choice[1]} if force_choice else None
+    return optimize(rows, 1.0, soft_relative_tolerance=0.0,
+                    _forbidden_choices=forbidden, _forced_choices=forced)
 
 
 def _set_selected_ranks(game: dict, ranks: tuple[int, ...]) -> None:
@@ -211,6 +274,7 @@ def optimize(
     risk_rank_lifts: list[float] | tuple[float, ...] = (1.0,) * 14,
     soft_relative_tolerance: float = 0.005,
     _forbidden_choices: dict[int, tuple[int, ...]] | None = None,
+    _forced_choices: dict[int, tuple[int, ...]] | None = None,
 ) -> tuple[list[dict], float]:
     validate_next_contest(rows)
     if len(risk_rank_lifts) != 14:
@@ -233,6 +297,9 @@ def optimize(
         probs = top1_risk_scale(probs, risk_rank_lifts[risk_rank - 1])
         ranking = rank_results(probs)
         options = _allowed_options(row, ranking)
+        if _forced_choices and int(row["Jogo"]) in _forced_choices:
+            forced = _forced_choices[int(row["Jogo"])]
+            options = [option for option in options if option == forced]
         if _forbidden_choices and int(row["Jogo"]) in _forbidden_choices:
             forbidden = _forbidden_choices[int(row["Jogo"])]
             options = [option for option in options if option != forbidden]
@@ -382,6 +449,7 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
           f"tolerância={predictions[0]['tolerancia_relativa_soft']:.3%}")
     _print_substitution_audit(predictions)
     _print_decision_regret(predictions)
+    _print_alternative_regret(predictions)
     _print_double_cutoff(predictions, exact_success)
 
 
@@ -393,6 +461,17 @@ def _print_decision_regret(predictions: list[dict]) -> None:
         print(f"{item['Jogo']:>4} | {item['DecisaoAtual']:>11} | {item['MelhorAlternativa']:>18} | "
               f"{item['P13plus_alternativo']:.8%} | {item['RegretAbsoluto']:.8%} | "
               f"{item['RegretRelativo']:.4%} | {item['ClassificacaoRobustez']}")
+
+
+def _print_alternative_regret(predictions: list[dict]) -> None:
+    """Print the globally reoptimized cost of every feasible decision type."""
+    print("\n=== P13+ REGRET POR ALTERNATIVA ===")
+    print("Jogo | Alternativa | P13+ condicionado | Regret rel. | Robustez")
+    for item in alternative_regret_audit(predictions):
+        marker = " *" if item["AlternativaAtual"] else ""
+        print(f"{item['Jogo']:>4} | {item['Alternativa']:>11}{marker:<2} | "
+              f"{item['P13plus_alternativo']:.8%} | {item['RegretRelativo']:.4%} | "
+              f"{item['ClassificacaoRobustez']}")
 
 
 def _print_substitution_audit(predictions: list[dict]) -> None:
