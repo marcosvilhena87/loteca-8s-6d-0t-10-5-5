@@ -85,6 +85,48 @@ def substitution_audit(predictions: list[dict]) -> list[dict]:
     return audit
 
 
+def decision_regret_audit(predictions: list[dict]) -> list[dict]:
+    """Reoptimize the other 13 games after forbidding each current decision.
+
+    Unlike :func:`substitution_audit`, this is a global counterfactual: the
+    optimizer may change any of the remaining games.  Probabilities in
+    ``predictions`` are already calibrated, so the synthetic input deliberately
+    uses identity calibration.  The reference is the unconstrained global
+    optimum, not the possibly near-optimal ticket selected by soft preferences.
+    """
+    validate_ticket(predictions)
+    rows = [{
+        "Concurso": str(game["Concurso"]), "Jogo": str(game["Jogo"]),
+        "Mandante": game["Mandante"], "Visitante": game["Visitante"],
+        "p(1)": str(game["p(1)"]), "p(x)": str(game["p(X)"]), "p(2)": str(game["p(2)"]),
+    } for game in predictions]
+    optimum = float(predictions[0]["P13plus_otimo"])
+    current_success = sum(_ticket_distribution(predictions)[13:])
+    audit = []
+    for game in predictions:
+        current = tuple(int(rank[-1]) - 1 for rank in game["ranks_selecionados"].split("+"))
+        alternative, alternative_success = optimize(
+            rows, 1.0, soft_relative_tolerance=0.0,
+            _forbidden_choices={int(game["Jogo"]): current},
+        )
+        alternative_game = next(item for item in alternative if int(item["Jogo"]) == int(game["Jogo"]))
+        regret = max(0.0, optimum - alternative_success)
+        relative = regret / optimum if optimum else 0.0
+        robustness = "FRONTEIRA" if relative <= 0.001 else ("MODERADA" if relative <= 0.01 else "ROBUSTA")
+        audit.append({
+            "Jogo": int(game["Jogo"]),
+            "DecisaoAtual": game["ranks_selecionados"],
+            "MelhorAlternativa": alternative_game["ranks_selecionados"],
+            "P13plus_atual": current_success,
+            "P13plus_otimo": optimum,
+            "P13plus_alternativo": alternative_success,
+            "RegretAbsoluto": regret,
+            "RegretRelativo": relative,
+            "ClassificacaoRobustez": robustness,
+        })
+    return audit
+
+
 def _set_selected_ranks(game: dict, ranks: tuple[int, ...]) -> None:
     """Update a copied prediction consistently for structural audit."""
     selected = [game[f"top{rank + 1}"] for rank in ranks]
@@ -168,6 +210,7 @@ def optimize(
     rows: list[dict[str, str]], temperature: float, rank_lifts: list[float] | tuple[float, ...] = (1.0, 1.0, 1.0),
     risk_rank_lifts: list[float] | tuple[float, ...] = (1.0,) * 14,
     soft_relative_tolerance: float = 0.005,
+    _forbidden_choices: dict[int, tuple[int, ...]] | None = None,
 ) -> tuple[list[dict], float]:
     validate_next_contest(rows)
     if len(risk_rank_lifts) != 14:
@@ -189,7 +232,11 @@ def optimize(
         base_ranking = rank_results(base_probs)
         probs = top1_risk_scale(probs, risk_rank_lifts[risk_rank - 1])
         ranking = rank_results(probs)
-        games.append((row, probs, ranking, _allowed_options(row, ranking), risk_rank, base_probs, base_ranking))
+        options = _allowed_options(row, ranking)
+        if _forbidden_choices and int(row["Jogo"]) in _forbidden_choices:
+            forbidden = _forbidden_choices[int(row["Jogo"])]
+            options = [option for option in options if option != forbidden]
+        games.append((row, probs, ranking, options, risk_rank, base_probs, base_ranking))
 
     # State: number of selected rank-1/rank-2/rank-3 outcomes and doubles.
     states: dict[tuple[int, int, int, int], list[Candidate]] = {(0, 0, 0, 0): [Candidate(1.0, 0.0, ())]}
@@ -334,7 +381,18 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
           f"perda relativa={predictions[0]['perda_relativa_soft']:.6%} | "
           f"tolerância={predictions[0]['tolerancia_relativa_soft']:.3%}")
     _print_substitution_audit(predictions)
+    _print_decision_regret(predictions)
     _print_double_cutoff(predictions, exact_success)
+
+
+def _print_decision_regret(predictions: list[dict]) -> None:
+    """Print global, conditioned P13+ regret for every ticket decision."""
+    print("\n=== P13+ REGRET POR DECISÃO (REOTIMIZAÇÃO GLOBAL) ===")
+    print("Jogo | Atual | Alternativa global | P13+ alternativo | Regret abs. | Regret rel. | Robustez")
+    for item in decision_regret_audit(predictions):
+        print(f"{item['Jogo']:>4} | {item['DecisaoAtual']:>11} | {item['MelhorAlternativa']:>18} | "
+              f"{item['P13plus_alternativo']:.8%} | {item['RegretAbsoluto']:.8%} | "
+              f"{item['RegretRelativo']:.4%} | {item['ClassificacaoRobustez']}")
 
 
 def _print_substitution_audit(predictions: list[dict]) -> None:
