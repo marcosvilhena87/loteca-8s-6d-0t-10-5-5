@@ -395,7 +395,7 @@ Essa distinção motiva o próximo aprimoramento prioritário: `P13plusRegret`.
 
 ---
 
-# P13+ Regret por decisão — PRIORIDADE 1
+# P13+ Regret por decisão — IMPLEMENTADO
 
 Generalizar a matriz de substituições para qualquer decisão relevante do bilhete.
 
@@ -438,6 +438,13 @@ regret alto -> decisão estruturalmente robusta
 ```
 
 O `P13plusRegret` deve ter precedência sobre conclusões baseadas somente em `pTop1`, `risk_rank` ou posição 6º/7º.
+
+A implementação atual proíbe, uma a uma, cada combinação escolhida no bilhete e
+executa novamente a otimização global dos 14 jogos. O relatório compara o melhor
+bilhete condicionado com o ótimo probabilístico irrestrito, informa regret
+absoluto e relativo e classifica a decisão como `FRONTEIRA`, `MODERADA` ou
+`ROBUSTA`. A análise usa as probabilidades já calibradas e mantém a validação
+independente de todas as Hard Constraints.
 
 ---
 

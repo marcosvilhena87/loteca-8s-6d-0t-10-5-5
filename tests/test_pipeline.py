@@ -1,7 +1,7 @@
 import unittest
 
 from scripts.common import rank_results, rank_scale, top1_risk_scale
-from scripts.predict_results import hit_distribution, optimize, substitution_audit, validate_ticket
+from scripts.predict_results import decision_regret_audit, hit_distribution, optimize, substitution_audit, validate_ticket
 from scripts.train_model import _decision_impact, _risk_rank_analysis, _tail_metrics, _validated_temperature
 
 
@@ -141,6 +141,21 @@ class PipelineTests(unittest.TestCase):
         predictions[0]["palpite"] = "1X2"
         with self.assertRaisesRegex(ValueError, "Hard Constraints violadas"):
             validate_ticket(predictions)
+
+    def test_decision_regret_reoptimizes_globally_without_breaking_constraints(self):
+        rows = [{
+            "Concurso": "1", "Jogo": str(game), "Mandante": f"TIME {game} A",
+            "Visitante": f"TIME {game} B", "p(1)": f"0,{40 + game:02d}",
+            "p(x)": "0,30", "p(2)": f"0,{30 - game:02d}",
+        } for game in range(1, 15)]
+        predictions, _ = optimize(rows, 1.0)
+        audit = decision_regret_audit(predictions)
+        self.assertEqual(len(audit), 14)
+        self.assertEqual({item["Jogo"] for item in audit}, set(range(1, 15)))
+        self.assertTrue(all(item["DecisaoAtual"] != item["MelhorAlternativa"] for item in audit))
+        self.assertTrue(all(item["RegretAbsoluto"] >= 0 for item in audit))
+        self.assertTrue(all(item["P13plus_alternativo"] <= item["P13plus_otimo"] + 1e-12 for item in audit))
+        self.assertTrue(all(item["ClassificacaoRobustez"] in ("FRONTEIRA", "MODERADA", "ROBUSTA") for item in audit))
 
     def test_optimizer_rejects_invalid_soft_tolerance(self):
         rows = [{
