@@ -57,6 +57,56 @@ Depois de aprovado, seus parâmetros são reestimados usando todo o histórico d
 
 ---
 
+# Snapshot de validação — 25/08/2026
+
+Última execução registrada do pipeline:
+
+```text
+Calibração por temperatura: promovida
+Temperatura: 0.88
+Log-loss bruto:       0.966102
+Log-loss calibrado:  0.964164
+
+Calibração por rank: rejeitada
+Calibração risk_rank: promovida
+Log-loss antes do risk_rank: 0.964164
+Log-loss após risk_rank:     0.964018
+```
+
+Validação real dos bilhetes no holdout:
+
+```text
+13+: 1 -> 1
+12+: 4 -> 5
+Net13Gain: 0
+Média de acertos: 8.728 -> 8.761
+```
+
+Funil de impacto decisório:
+
+```text
+concursos avaliados: 92
+ranking mudou:        15
+conjunto de duplos:   15
+bilhete final mudou:  32
+acertos mudaram:      18
+faixa 13+ mudou:       0
+```
+
+Nos 32 bilhetes efetivamente alterados:
+
+```text
+acertos médios: 8.344 -> 8.438
+DecisionNetGain: +3
+DecisionWinRate:  34.4%
+DecisionLossRate: 21.9%
+DecisionTieRate:  43.8%
+```
+
+Interpretação atual: o `risk_rank` apresenta **ganho pequeno de calibração, mas efeito operacional positivo**, sem regressão observada em 13+ no holdout. Ainda não há evidência suficiente para afirmar aumento da frequência de 13+; portanto, a validação deve continuar priorizando amostras futuras e múltiplas janelas temporais.
+
+---
+
 # Hard Constraints
 
 ```text
@@ -100,17 +150,7 @@ A regra deve ser tratada como preferência, e não como proibição absoluta:
 5. somente depois aplicar os demais critérios de desempate estrutural
 ```
 
-A tolerância atualmente usada como referência é de **0,5% de perda relativa máxima** em `P(>=13)` em relação ao ótimo global.
-
-Exemplo:
-
-```text
-P13plus_otimo = 0,04000
-P13plus_candidato = 0,03985
-perda_relativa = 0,375%
-```
-
-Nesse caso, o candidato permanece dentro da tolerância e pode ser preferido se excluir uma ou ambas as vitórias indesejadas.
+A tolerância atual é de **0,5% de perda relativa máxima** em `P(>=13)` em relação ao ótimo global.
 
 Não adicionar bônus arbitrário diretamente a `P(>=13)`.
 
@@ -157,7 +197,7 @@ Ela produz exatamente 10 Top1, 5 Top2 e 5 Top3. Essa composição é apenas refe
 
 ---
 
-# Cobertura dos duplos
+# Cobertura, DoubleGain e RecoveryGain
 
 ```text
 CoberturaD12 = p(top1) + p(top2)
@@ -173,18 +213,14 @@ CoberturaD12 >= CoberturaD13 >= CoberturaD23
 
 A escolha final, porém, é global e deve fechar exatamente 10/5/5.
 
----
-
-# DoubleGain e RecoveryGain
-
-D12 e D13 preservam Top1 e acrescentam uma segunda marcação:
+D12 e D13 preservam Top1:
 
 ```text
 DoubleGain(D12) = p(top2)
 DoubleGain(D13) = p(top3)
 ```
 
-D23 é diferente: ele abandona Top1 e troca por Top2+Top3.
+D23 abandona Top1:
 
 ```text
 RecoveryGain(D23)
@@ -194,45 +230,25 @@ RecoveryGain(D23)
 
 Não tratar D23 como `DoubleGain`.
 
-Telemetria por jogo:
-
-```text
-p(top1)
-p(top2)
-p(top3)
-CoberturaD12
-CoberturaD13
-CoberturaD23
-tipo escolhido
-DoubleGain, se D12/D13
-RecoveryGain, se D23
-```
-
 ---
 
 # GameUncertainty e DoubleValue
 
-Separar dois conceitos diferentes:
-
-## GameUncertainty
-
-Mede quão incerto é o jogo, independentemente da decisão estrutural.
-
-Sugestão:
+Separar dois conceitos:
 
 ```text
 GameUncertainty = Entropia / log(3)
 ```
 
-## DoubleValue
-
-Mede quanto a melhor cobertura de duas marcações acrescenta em relação ao seco Top1.
+Mede a incerteza intrínseca do jogo.
 
 ```text
 DoubleValue = max(CoberturaD12, CoberturaD13, CoberturaD23) - p(top1)
 ```
 
-Um jogo pode ser muito incerto sem necessariamente ser o melhor local para gastar um dos seis duplos, porque o fechamento global 10/5/5 pode tornar outra alocação superior.
+Mede o ganho potencial da melhor cobertura dupla em relação ao seco Top1.
+
+Um jogo pode ser muito incerto sem ser o melhor local para gastar um duplo, porque o fechamento global 10/5/5 pode tornar outra alocação superior.
 
 ---
 
@@ -261,25 +277,27 @@ HistoricalConfidence
 lift_shrunk
 ```
 
-O fator final sofre shrinkage de acordo com tamanho de amostra e estabilidade temporal, evitando transformar ruído histórico em grandes correções probabilísticas.
+O fator final sofre shrinkage conforme tamanho de amostra e estabilidade temporal.
 
-Métricas futuras úteis:
+Próximas métricas formais:
 
 ```text
 RiskRankPrecision@6
 RiskRankRecall@6
 RiskRankNDCG@6
 RiskRankECE
-Brier por risk_rank
+RiskRankBrier
 ```
+
+Objetivo de `Precision@6`: medir quantos dos seis jogos classificados como mais perigosos realmente tiveram falha do Top1.
+
+Objetivo de `Recall@6`: medir quantas falhas Top1 do concurso estavam concentradas nesses seis jogos.
 
 ---
 
 # Funil de impacto decisório
 
 Uma melhora probabilística não basta. O projeto mede se a calibração chega de fato à aposta final.
-
-Relatório:
 
 ```text
 concursos avaliados
@@ -290,7 +308,7 @@ acertos mudaram
 faixa 13+ mudou
 ```
 
-Nos bilhetes alterados, comparar:
+Nos bilhetes alterados:
 
 ```text
 média de acertos Champion -> Challenger
@@ -321,30 +339,15 @@ duplo: c_i = p(resultado A) + p(resultado B)
 
 A distribuição exata de acertos é obtida por convolução dinâmica, sem Monte Carlo.
 
-O objetivo é otimizar diretamente:
+O objetivo é:
 
 ```text
 P(>=13) = P(13) + P(14)
 ```
 
-A solução final deve satisfazer:
+A solução final deve satisfazer simultaneamente todas as Hard Constraints.
 
-```text
-8 secos
-6 duplos
-0 triplos
-10 Top1
-5 Top2
-5 Top3
-20 marcações
-regra obrigatória do Flamengo
-```
-
----
-
-# Decomposição do objetivo
-
-Para cada bilhete final, reportar:
+Para cada bilhete, reportar:
 
 ```text
 P(14)
@@ -382,55 +385,51 @@ Nunca corrigir silenciosamente um bilhete inválido.
 
 Para cada duplo selecionado, testar substituições estruturalmente válidas e recalcular exatamente `P(>=13)`.
 
-Telemetria:
-
-```text
-DuploOriginal
-JogoSubstituto
-TipoOriginal
-TipoSubstituto
-P13plus_original
-P13plus_alternativo
-DeltaP13plus
-```
-
-Definir:
-
 ```text
 DeltaP13plus = P13plus_alternativo - P13plus_original
 ```
 
-Essa auditoria mede o custo real de deslocar um duplo, respeitando a estrutura 10/5/5.
+A matriz atual é útil para medir trocas locais, mas não substitui uma reotimização global condicionada.
+
+Essa distinção motiva o próximo aprimoramento prioritário: `P13plusRegret`.
 
 ---
 
-# P13+ Regret por decisão — prioridade alta
+# P13+ Regret por decisão — PRIORIDADE 1
 
-Próximo aprimoramento recomendado: generalizar a matriz de substituições para qualquer decisão relevante do bilhete.
-
-Definir:
+Generalizar a matriz de substituições para qualquer decisão relevante do bilhete.
 
 ```text
 P13plusRegret(decisão)
 = P13plus_ótimo
-- P13plus_melhor_bilhete_que_força_decisão_alternativa
+- P13plus_melhor_bilhete_condicionado_a_decisão_alternativa
 ```
 
-Objetivo: responder quanto custa contrariar cada decisão do otimizador.
+O ponto fundamental é **reotimizar os outros 13 jogos**, em vez de fazer apenas uma troca local.
 
-Exemplo de telemetria:
+Exemplos de contrafactuais:
+
+```text
+jogo seco atual -> proibir esse seco
+jogo duplo atual -> forçar seco
+D23 atual -> exigir presença do Top1
+decisão atual -> proibir exatamente a combinação escolhida
+```
+
+Telemetria sugerida:
 
 ```text
 Jogo
 Decisão atual
-Melhor alternativa estrutural válida
+Melhor alternativa global válida
 P13plus atual
 P13plus alternativo
-Regret
-Classificação de fragilidade
+Regret absoluto
+Regret relativo
+Classificação de robustez
 ```
 
-Classificação sugerida:
+Classificação inicial:
 
 ```text
 regret muito baixo -> decisão de fronteira
@@ -438,51 +437,15 @@ regret intermediário -> decisão moderadamente robusta
 regret alto -> decisão estruturalmente robusta
 ```
 
-O `P13+ Regret` deve ser preferido a conclusões baseadas somente em `pTop1` ou `risk_rank`.
+O `P13plusRegret` deve ter precedência sobre conclusões baseadas somente em `pTop1`, `risk_rank` ou posição 6º/7º.
 
 ---
 
-# Auditoria histórica da fronteira 6º × 7º — prioridade alta
+# Robustez a perturbações probabilísticas — PRIORIDADE 2
 
-A fronteira simples por `1-p(top1)` é apenas diagnóstico, pois o fechamento 10/5/5 pode impedir uma troca direta.
+O ótimo matemático pode depender de diferenças probabilísticas muito pequenas.
 
-Mesmo assim, concursos em que o 6º e o 7º candidatos ficam muito próximos merecem auditoria histórica.
-
-Faixas sugeridas:
-
-```text
-margem <= 0.01
-margem <= 0.02
-margem <= 0.05
-```
-
-Para esses casos, comparar se a decisão Champion ou a melhor alternativa estrutural teria produzido mais acertos.
-
-Features candidatas para desempate futuro:
-
-```text
-p(top1)
-gap12
-gap13
-entropia
-GameUncertainty
-DoubleValue
-RecoveryGain
-risk_rank
-HistoricalConfidence
-tipo de duplo necessário
-P13plusRegret
-```
-
-Nenhum `cutoff_score` deve ser implantado antes de validação Champion/Challenger fora da amostra.
-
----
-
-# Robustez do bilhete a perturbações — prioridade alta
-
-O bilhete ótimo pode ser sensível a pequenas mudanças probabilísticas.
-
-Testar perturbações controladas, por exemplo:
+Testar perturbações controladas:
 
 ```text
 ±0,5 ponto percentual
@@ -490,9 +453,17 @@ Testar perturbações controladas, por exemplo:
 ±2,0 pontos percentuais
 ```
 
-Após cada perturbação, renormalizar as probabilidades e reotimizar.
+Após cada perturbação:
 
-Métricas sugeridas:
+```text
+perturbar
+-> renormalizar
+-> recalibrar somente se o protocolo exigir
+-> reotimizar
+-> comparar decisões
+```
+
+Métricas:
 
 ```text
 TicketStability@0.5pp
@@ -501,6 +472,7 @@ TicketStability@2.0pp
 DecisionStability por jogo
 DoubleSetStability
 Top1SetStability
+MarkStability
 ```
 
 Objetivo:
@@ -511,7 +483,42 @@ distinguir decisão ótima de decisão robustamente ótima
 
 ---
 
-# Auditoria histórica D12 / D13 / D23 — prioridade alta
+# Simulação conjunta de incerteza — PRIORIDADE FUTURA
+
+Depois das perturbações determinísticas, gerar múltiplos cenários probabilísticos plausíveis:
+
+```text
+probabilidades originais
++ ruído pequeno controlado
+-> renormalização
+-> reotimização
+```
+
+Exemplo inicial:
+
+```text
+1.000 cenários
+```
+
+Relatório:
+
+```text
+Jogo
+Decisão mais frequente
+Frequência da decisão
+Frequência de seco
+Frequência de D12
+Frequência de D13
+Frequência de D23
+```
+
+Isso cria um **consenso do otimizador** e ajuda a identificar decisões instáveis.
+
+Não usar essa simulação para substituir o cálculo exato de `P(>=13)`.
+
+---
+
+# Auditoria histórica D12 / D13 / D23 — PRIORIDADE 3
 
 Como D23 elimina completamente o Top1, ele deve ser auditado separadamente.
 
@@ -525,67 +532,99 @@ acertos
 lift
 ```
 
-Para D23, medir adicionalmente:
+Para D23:
 
 ```text
 Top1 acertou
-Top2/Top3 acertou
+Top2 acertou
+Top3 acertou
 D23 evitou erro do seco
 D23 causou erro ao excluir Top1
+RecoveryWins
+RecoveryLosses
 NetRecoveryGain
 RecoveryRate
 ```
 
-Isso permite validar se a estratégia de abandonar o favorito nominal funciona de forma consistente fora da amostra.
+Pergunta central:
+
+```text
+abandonar o favorito nominal via D23 gera ganho consistente fora da amostra?
+```
 
 ---
 
-# Explicação de secos inesperados
+# Auditoria histórica da fronteira 6º × 7º
 
-Quando um jogo de `risk_rank` baixo permanecer seco enquanto outro de rank posterior receber duplo, emitir diagnóstico estrutural.
+A fronteira simples por `1-p(top1)` é apenas diagnóstico, pois o fechamento 10/5/5 pode impedir troca direta.
+
+Avaliar concursos históricos com margens pequenas:
+
+```text
+margem <= 0.01
+margem <= 0.02
+margem <= 0.03
+margem <= 0.05
+```
+
+Preferir `P13plusRegret` para medir a distância estrutural entre a decisão escolhida e a melhor alternativa global.
+
+Nenhum `cutoff_score` deve ser implantado antes de validação Champion/Challenger fora da amostra.
+
+---
+
+# Índice de fragilidade — diagnóstico futuro
+
+Depois de implementar `P13plusRegret` e estabilidade por perturbações, combinar sinais para classificar decisões:
+
+```text
+P13plusRegret
+DecisionStability
+probability gaps
+```
+
+Saída sugerida:
+
+```text
+ROBUSTA
+MODERADA
+FRÁGIL
+```
+
+Inicialmente esse índice deve ser **somente telemetria**. Não deve alterar o bilhete sem validação Champion/Challenger.
+
+---
+
+# Relatório automático “por que esta decisão?”
+
+A telemetria deve evoluir para explicações quantitativas.
 
 Exemplo:
 
 ```text
-Jogo A permaneceu seco porque promovê-lo a duplo exigiria
-compensação estrutural que reduziria P(>=13) em X.
+Jogo 8 recebeu D23 porque:
+- pTop1 baixo
+- gap12 pequeno
+- RecoveryGain elevado
+- decisão estável sob perturbações
+- alto P13plusRegret se o D23 for proibido
+
+Classificação: DECISÃO ROBUSTA
 ```
 
-Sempre que possível, quantificar com `DeltaP13plus` ou `P13plusRegret`.
+Para um seco inesperado:
+
+```text
+Jogo A permaneceu seco porque promover esse jogo a duplo
+forçaria uma reorganização estrutural cuja melhor solução
+reduziria P(>=13) em X.
+```
+
+Sempre que possível, usar `P13plusRegret` em vez de justificativas exclusivamente heurísticas.
 
 ---
 
-# Relatório “por que este duplo?”
-
-A telemetria deve evoluir para uma explicação automática por decisão.
-
-Exemplo conceitual:
-
-```text
-Jogo 10
-✓ pTop1 baixo
-✓ alto risco de falha do seco
-✓ forte RecoveryGain
-✓ duplo estruturalmente robusto
-✓ alto P13plusRegret se removido
-
-Classificação: DUPLO MUITO ROBUSTO
-```
-
-E, para uma decisão de fronteira:
-
-```text
-✓ duplo melhora cobertura
-⚠ último duplo selecionado
-⚠ alternativa muito próxima
-⚠ baixo P13plusRegret
-
-Classificação: DUPLO DE FRONTEIRA
-```
-
----
-
-# Backtest walk-forward multi-janelas — prioridade máxima
+# Backtest walk-forward multi-janelas — PRIORIDADE ALTA
 
 Além do holdout cronológico 80/20, implementar validação expanding-window.
 
@@ -598,7 +637,7 @@ Treino 1..240 -> Teste 241..260
 ...
 ```
 
-Comparar no mínimo:
+Comparar:
 
 ```text
 A = probabilidades brutas
@@ -608,7 +647,7 @@ D = Champion atual
 E = Challenger em avaliação
 ```
 
-Relatório mínimo por janela e agregado:
+Relatório mínimo:
 
 ```text
 Concursos
@@ -625,17 +664,15 @@ DecisionWinRate
 bilhetes alterados
 ```
 
-O ganho estimado de `P(>=13)` pelo próprio modelo não prova ganho real.
-
-A promoção de novos mecanismos deve privilegiar consistência entre várias janelas, e não desempenho excepcional em um único holdout.
+A promoção deve privilegiar consistência entre múltiplas janelas, e não desempenho excepcional em um único holdout.
 
 ---
 
-# Bootstrap pareado e incerteza — prioridade alta
+# Bootstrap pareado e incerteza
 
 Como `>=13` é raro, diferenças pequenas podem ser ruído.
 
-Para Champion/Challenger, estimar por reamostragem pareada de concursos:
+Para Champion/Challenger, estimar por reamostragem pareada:
 
 ```text
 IC95% do delta de mean_hits
@@ -645,9 +682,9 @@ P(DecisionNetGain > 0)
 P(Net13Gain > 0)
 ```
 
-O bootstrap deve preservar o pareamento Champion/Challenger por concurso.
+Preservar sempre o pareamento por concurso.
 
-Inicialmente, essas métricas devem funcionar como diagnóstico, não necessariamente como Hard Gate de promoção.
+Inicialmente, essas métricas devem ser diagnóstico, não Hard Gate.
 
 ---
 
@@ -666,6 +703,7 @@ Relatório padrão:
 Métrica                  Champion   Challenger   Delta
 LogLoss
 Brier
+ECE
 mean_hits
 12+
 13+
@@ -673,6 +711,7 @@ mean_hits
 Net13Gain
 DecisionNetGain
 DecisionWinRate
+DecisionLossRate
 bilhetes alterados
 ```
 
@@ -689,6 +728,34 @@ Uma mudança só deve ser promovida quando:
 ```
 
 Log-loss, Brier, ECE e `mean_hits` são evidências auxiliares.
+
+---
+
+# Backtest de estruturas alternativas
+
+A estrutura 10-5-5 é Hard Constraint da versão atual, mas pode ser estudada em **experimentos separados**, sem alterar o Champion.
+
+Comparar estruturas com 8 secos, 6 duplos e 20 marcações, por exemplo:
+
+```text
+10-5-5
+9-6-5
+9-5-6
+11-5-4
+11-4-5
+```
+
+Comparar fora da amostra:
+
+```text
+13+
+12+
+mean_hits
+Net13Gain
+DecisionNetGain
+```
+
+A comparação serve para testar a justificativa empírica da estrutura 10-5-5, não para relaxá-la silenciosamente.
 
 ---
 
@@ -715,51 +782,7 @@ Consolidar por composição:
 D12 D13 D23 | concursos | 14 | 13+ | 12+ | mean_hits
 ```
 
-Também reportar:
-
-```text
-Net13Gain
-DecisionNetGain
-RecoveryRate
-DoubleWasteRate
-```
-
-Não promover uma composição fixa apenas porque ela aparece com frequência no otimizador.
-
----
-
-# Robustez temporal das composições
-
-Comparar:
-
-```text
-últimos 50 concursos
-últimos 100 concursos
-últimos 200 concursos
-histórico completo
-```
-
-Sinais instáveis devem sofrer shrinkage ou permanecer apenas como diagnóstico.
-
----
-
-# Ablation estrutural
-
-Comparar:
-
-```text
-A = otimizador livre atual
-B = composição fixa 4 D23 + 1 D12 + 1 D13
-C = composição aprendida historicamente
-D = composição dinâmica por risk_rank + gaps + entropia
-```
-
-Critério principal:
-
-```text
->=13
-Net13Gain
-```
+Não promover composição fixa apenas porque aparece com frequência no otimizador.
 
 ---
 
@@ -786,18 +809,7 @@ P(top2_hit | top1_fail)
 P(top3_hit | top1_fail)
 ```
 
-Treinar um Challenger somente nos jogos históricos com:
-
-```text
-top1_hit = 0
-```
-
-Target sugerido:
-
-```text
-Top2 -> 1
-Top3 -> 0
-```
+Treinar um Challenger somente nos jogos históricos com `top1_hit = 0`.
 
 Features candidatas:
 
@@ -822,7 +834,7 @@ A aplicação inicial preferencial é orientar D12/D13/D23, sem substituir proba
 
 Não adicionar novos conjuntos de fatores categóricos enquanto o ganho atual ainda estiver sendo consolidado.
 
-Uma evolução futura possível é substituir os 14 fatores independentes por uma função suavizada:
+Evoluções futuras possíveis:
 
 ```text
 f(risk_rank)
@@ -836,7 +848,7 @@ f(pTop1, risk_percentile)
 
 Isso pode reduzir descontinuidades artificiais entre ranks vizinhos.
 
-Só testar depois que o pipeline de walk-forward, bootstrap e Champion/Challenger estiver consolidado.
+Só testar depois que walk-forward, bootstrap e Champion/Challenger estiverem consolidados.
 
 ---
 
@@ -872,6 +884,7 @@ probabilidade coberta
 DoubleGain ou RecoveryGain
 P13plusRegret, quando disponível
 DecisionStability, quando disponível
+FragilityClass, quando disponível
 ```
 
 Resumo:
@@ -892,34 +905,64 @@ Flamengo: regra satisfeita
 
 # Roadmap priorizado
 
-## Prioridade 1
+## Prioridade 1 — explicabilidade estrutural
 
 ```text
 P13+ Regret por jogo/decisão
-Auditoria histórica da fronteira 6º x 7º
-Walk-forward multi-janelas
+reotimização global contrafactual
+explicação automática de secos e duplos
 ```
 
-## Prioridade 2
+## Prioridade 2 — robustez
 
 ```text
-Bootstrap pareado do ganho
-Robustez a perturbações probabilísticas
-Auditoria histórica D12/D13/D23
+perturbações ±0,5 / ±1 / ±2 pp
+DecisionStability
+DoubleSetStability
+TicketStability
+```
+
+## Prioridade 3 — validação dos tipos de duplo
+
+```text
+auditoria histórica D12/D13/D23
+RecoveryWins / RecoveryLosses
+NetRecoveryGain
+RecoveryRate
+```
+
+## Prioridade 4 — validação do risk_rank
+
+```text
+RiskRankPrecision@6
+RiskRankRecall@6
+RiskRankNDCG@6
+RiskRankECE
+RiskRankBrier
+```
+
+## Prioridade 5 — validação temporal
+
+```text
+walk-forward multi-janelas
+bootstrap pareado
 Champion/Challenger padronizado
 ```
 
-## Prioridade 3
+## Prioridade 6 — pesquisa estrutural
 
 ```text
-GameUncertainty x DoubleValue
-Relatório automático “por que este duplo?”
-Pesquisa Top1_fail -> Top2/Top3
+auditoria histórica 6º x 7º
+backtest de estruturas alternativas
+StructuralCost
+Top1_fail -> Top2/Top3
 ```
 
 ## Prioridade futura
 
 ```text
+simulação conjunta de incerteza
+índice de fragilidade
 risk_rank suavizado
 modelos mais complexos somente após evidência clara de necessidade
 ```
@@ -931,17 +974,19 @@ modelos mais complexos somente após evidência clara de necessidade
 Evitar adicionar complexidade sem evidência fora da amostra:
 
 ```text
+scores manuais para escolher duplos
+bônus arbitrário a zebras
+pesos arbitrários de entropia
+cutoff_score não validado
 redes neurais apenas por sofisticação
 XGBoost/LightGBM sem baseline convincente
 calibrações excessivamente segmentadas
-14x3 ou mais parâmetros adicionais sem shrinkage
-bônus manual a zebras
-pesos arbitrários de entropia
+14x3 ou mais parâmetros sem shrinkage
 novas Soft Constraints sem backtest
 Monte Carlo onde a solução exata já existe
 ```
 
-A vantagem atual do projeto é combinar **transparência, cálculo exato e validação cronológica**. Essa característica deve ser preservada.
+Antes de criar uma nova heurística para os seis duplos, o projeto deve primeiro **medir o regret, a estabilidade e a robustez das decisões do otimizador atual**.
 
 ---
 
@@ -958,6 +1003,7 @@ A evolução do sistema deve seguir esta ordem:
 ```text
 medir
 -> auditar
+-> explicar
 -> criar Challenger
 -> validar fora da amostra
 -> medir incerteza
